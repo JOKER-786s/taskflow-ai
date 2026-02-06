@@ -1,0 +1,7 @@
+{
+  "name": "TaskFlow AI",
+  "description": "A smart Kanban-style task tracker with integrated Gemini AI for context-aware project management assistance.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
