@@ -126,9 +126,12 @@ interface KanbanColumnProps {
   onEdit: (ticket: Ticket) => void;
   onDelete: (id: string) => void;
   onToggleTimer: (id: string) => void;
+  // Bulk Actions
+  selectedIds: Set<string>;
+  onToggleSelection: (id: string) => void;
 }
 
-const KanbanColumn: React.FC<KanbanColumnProps> = ({ status, tickets, onDrop, onEdit, onDelete, onToggleTimer }) => {
+const KanbanColumn: React.FC<KanbanColumnProps> = ({ status, tickets, onDrop, onEdit, onDelete, onToggleTimer, selectedIds, onToggleSelection }) => {
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
@@ -158,16 +161,24 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({ status, tickets, onDrop, on
             key={ticket.id}
             draggable
             onDragStart={(e) => e.dataTransfer.setData('ticketId', ticket.id)}
-            className={`bg-white/80 dark:bg-gray-800/80 p-5 rounded-2xl shadow-sm border ${ticket.isTiming ? 'border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-900' : 'border-transparent'} hover:border-indigo-200 dark:hover:border-indigo-600 cursor-move hover:shadow-lg transition-all duration-300 group relative hover:-translate-y-1`}
+            className={`bg-white/80 dark:bg-gray-800/80 p-5 rounded-2xl shadow-sm border ${ticket.isTiming ? 'border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-900' : (selectedIds.has(ticket.id) ? 'border-indigo-500 ring-1 ring-indigo-500' : 'border-transparent')} hover:border-indigo-200 dark:hover:border-indigo-600 cursor-move hover:shadow-lg transition-all duration-300 group relative hover:-translate-y-1`}
           >
             <div className="flex justify-between items-start mb-3">
-              <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
-                ticket.priority === Priority.High ? 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300' :
-                ticket.priority === Priority.Medium ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300' :
-                'bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-300'
-              }`}>
-                {ticket.priority}
-              </span>
+               <div className="flex items-center gap-2">
+                 <input 
+                   type="checkbox"
+                   className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-500 transition-all transform hover:scale-110"
+                   checked={selectedIds.has(ticket.id)}
+                   onChange={(e) => { e.stopPropagation(); onToggleSelection(ticket.id); }}
+                 />
+                 <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
+                  ticket.priority === Priority.High ? 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300' :
+                  ticket.priority === Priority.Medium ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300' :
+                  'bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-300'
+                }`}>
+                  {ticket.priority}
+                </span>
+               </div>
               <button onClick={() => onDelete(ticket.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all duration-300 hover:scale-110">
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -189,7 +200,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({ status, tickets, onDrop, on
                  >
                    {ticket.isTiming ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
                    <span className="font-mono font-bold">
-                     {Math.floor(ticket.timeSpent / 60)}h {ticket.timeSpent % 60}m
+                     {(ticket.timeSpent < 1 && ticket.timeSpent > 0) ? '< 1m' : `${Math.floor(ticket.timeSpent / 60)}h ${Math.floor(ticket.timeSpent % 60)}m`}
                    </span>
                  </button>
                  <div className="flex items-center gap-1 text-gray-400">
@@ -939,6 +950,9 @@ const App: React.FC = () => {
   // NEW: Font State - Default to 'font-animated' (Fredoka)
   const [currentFont, setCurrentFont] = useState('font-animated');
 
+  // NEW: Bulk Selection State
+  const [selectedTicketIds, setSelectedTicketIds] = useState<Set<string>>(new Set());
+
   // Load Initial State
   useEffect(() => {
     const savedTickets = localStorage.getItem(STORAGE_KEY_TICKETS);
@@ -1033,6 +1047,11 @@ const App: React.FC = () => {
   const handleDelete = (id: string) => {
     if (confirm('Delete this ticket?')) {
       setTickets(prev => prev.filter(t => t.id !== id));
+      setSelectedTicketIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -1103,6 +1122,74 @@ const App: React.FC = () => {
     setIsModalOpen(true);
   }
 
+  // --- Bulk Selection Logic ---
+  const toggleSelection = (id: string) => {
+    setSelectedTicketIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedTicketIds(new Set());
+  };
+
+  const handleBulkStatusChange = (status: Status) => {
+    if (!status) return;
+    setTickets(prev => prev.map(t => {
+      if (selectedTicketIds.has(t.id)) {
+        // Re-use logic for timer updates
+        const isCompleting = status === Status.Completed;
+        const isInProgress = status === Status.InProgress;
+        const now = Date.now();
+        let updates: Partial<Ticket> = { status };
+
+        if (t.isTiming && t.lastStartedAt) {
+           const elapsed = (now - t.lastStartedAt) / 60000;
+           updates.timeSpent = (t.timeSpent || 0) + Math.floor(elapsed);
+           updates.lastStartedAt = undefined;
+           updates.isTiming = false;
+        }
+
+        if (isCompleting) {
+           updates.completedAt = now;
+           updates.isTiming = false;
+        } else if (isInProgress) {
+           updates.isTiming = true;
+           updates.lastStartedAt = now;
+        } else {
+           updates.isTiming = false;
+        }
+        return { ...t, ...updates };
+      }
+      return t;
+    }));
+    clearSelection();
+    if (status === Status.Completed) triggerConfetti();
+  };
+
+  const handleBulkPriorityChange = (priority: Priority) => {
+    if (!priority) return;
+    setTickets(prev => prev.map(t => selectedTicketIds.has(t.id) ? { ...t, priority } : t));
+    clearSelection();
+  };
+
+  const handleBulkDelete = () => {
+    if (confirm(`Are you sure you want to delete ${selectedTicketIds.size} tickets?`)) {
+      setTickets(prev => prev.filter(t => !selectedTicketIds.has(t.id)));
+      clearSelection();
+    }
+  };
+
+  const handleBulkDateChange = (date: string) => {
+    if (!date) return;
+    setTickets(prev => prev.map(t => selectedTicketIds.has(t.id) ? { ...t, dueDate: new Date(date).toISOString() } : t));
+    clearSelection();
+  }
+
+
   // Filter Logic
   const filteredTickets = tickets.filter(t => 
     t.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -1169,86 +1256,118 @@ const App: React.FC = () => {
         
         {/* Only show Header in Board/Calendar/Analytics Views */}
         {view !== 'notes' && (
-          <header className="h-24 border-b border-white/20 dark:border-gray-800 bg-white/40 dark:bg-gray-900/60 backdrop-blur-xl px-8 flex items-center justify-between sticky top-0 z-20 transition-all">
-            
-            <div className="flex items-center gap-8 flex-1">
-              <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-800 to-gray-500 dark:from-white dark:to-gray-400 min-w-max tracking-tight animate-fade-in">
-                {view === 'board' ? 'My Tasks' : view === 'calendar' ? 'Schedule' : 'Insights'}
+          <header className="h-24 border-b border-white/20 dark:border-gray-800 bg-white/40 dark:bg-gray-900/60 backdrop-blur-md flex items-center justify-between px-8 transition-colors duration-300">
+            <div className="flex items-center gap-4 flex-1">
+              <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-800 to-gray-600 dark:from-white dark:to-gray-300 capitalize tracking-tight">
+                {view === 'board' ? 'Task Board' : view}
               </h1>
-              
-              {/* SEARCH BAR */}
-              <div className="relative max-w-md w-full hidden md:block group animate-fade-in">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Search className="h-5 w-5 text-gray-400 group-focus-within:text-indigo-500 transition-colors" />
-                </div>
+              <div className="hidden md:flex items-center bg-white/50 dark:bg-gray-800/50 rounded-full px-4 py-2 border border-white/30 dark:border-gray-700 focus-within:ring-2 focus-within:ring-indigo-400 transition-all w-full max-w-md ml-8 shadow-sm">
+                <Search className="w-5 h-5 text-gray-400" />
                 <input 
-                  type="text"
-                  placeholder="Search tasks..."
+                  type="text" 
+                  placeholder="Search tasks, tags..." 
+                  className="bg-transparent border-none outline-none ml-2 text-sm w-full text-gray-700 dark:text-gray-200 placeholder-gray-400"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-white/60 dark:bg-gray-800/60 border border-white/50 dark:border-gray-700 focus:bg-white dark:focus:bg-gray-800 focus:border-indigo-500/50 rounded-2xl text-sm transition-all shadow-sm focus:shadow-xl outline-none backdrop-blur-sm"
                 />
               </div>
             </div>
 
             <div className="flex items-center gap-4">
-              <button onClick={cycleFont} className="p-3 rounded-full bg-white/60 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-all active:scale-95 shadow-sm hover:shadow-md backdrop-blur-sm" title="Change Font">
-                 <Type className="w-5 h-5" />
+              <button 
+                onClick={cycleFont} 
+                className="p-2.5 bg-white/60 dark:bg-gray-800/60 rounded-xl hover:bg-white dark:hover:bg-gray-700 transition-all shadow-sm hover:shadow-md active:scale-95"
+                title="Change Font"
+              >
+                <Type className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               </button>
-              <button onClick={toggleTheme} className="p-3 rounded-full bg-white/60 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-all hover:rotate-12 shadow-sm hover:shadow-md backdrop-blur-sm">
-                {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+
+              <button 
+                onClick={toggleTheme} 
+                className="p-2.5 bg-white/60 dark:bg-gray-800/60 rounded-xl hover:bg-white dark:hover:bg-gray-700 transition-all shadow-sm hover:shadow-md active:scale-95 group"
+              >
+                {darkMode ? <Sun className="w-5 h-5 text-amber-400 group-hover:rotate-90 transition-transform" /> : <Moon className="w-5 h-5 text-indigo-600 group-hover:-rotate-12 transition-transform" />}
               </button>
+              
               <button 
                 onClick={() => { setEditingTicket(null); setPrefillTicketData(undefined); setIsModalOpen(true); }}
-                className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-xl shadow-indigo-500/20 hover:shadow-indigo-500/40 active:scale-95 transform hover:-translate-y-0.5"
+                className="hidden md:flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg hover:shadow-indigo-500/30 transition-all transform hover:scale-105 active:scale-95"
               >
                 <Plus className="w-5 h-5" />
-                <span className="hidden sm:inline">New Task</span>
+                <span>New Ticket</span>
               </button>
             </div>
           </header>
         )}
 
-        {/* View Content */}
-        <div className={`flex-1 overflow-hidden ${view === 'notes' ? 'p-4' : 'p-8 overflow-x-auto'}`}>
-          {view === 'board' ? (
-            <div className="flex gap-8 h-full min-w-max pb-4 px-2">
-              {Object.values(Status).map((status, index) => (
-                <div key={status} className="h-full" style={{ animationDelay: `${index * 100}ms` }}>
-                  <KanbanColumn
-                    status={status}
-                    tickets={filteredTickets.filter(t => t.status === status)}
-                    onDrop={handleDrop}
-                    onEdit={openEdit}
-                    onDelete={handleDelete}
-                    onToggleTimer={toggleTimer}
-                  />
+        <div className="flex-1 overflow-x-auto overflow-y-hidden p-6 relative">
+            {view === 'board' && (
+              <>
+                {/* Bulk Actions Bar */}
+                {selectedTicketIds.size > 0 && (
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-6 animate-slide-up">
+                    <span className="font-bold text-sm">{selectedTicketIds.size} selected</span>
+                    <div className="h-4 w-px bg-gray-700"></div>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleBulkStatusChange(Status.Completed)} className="hover:text-emerald-400 transition-colors text-xs font-bold uppercase">Mark Done</button>
+                      <button onClick={() => handleBulkStatusChange(Status.InProgress)} className="hover:text-amber-400 transition-colors text-xs font-bold uppercase">Start</button>
+                    </div>
+                     <div className="h-4 w-px bg-gray-700"></div>
+                    <button onClick={handleBulkDelete} className="text-red-400 hover:text-red-300 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                    <button onClick={clearSelection} className="ml-2 hover:bg-gray-800 rounded-full p-1"><X className="w-4 h-4" /></button>
+                  </div>
+                )}
+
+                <div className="flex h-full gap-6 pb-4">
+                  {Object.values(Status).map(status => (
+                    <KanbanColumn 
+                      key={status} 
+                      status={status} 
+                      tickets={filteredTickets.filter(t => t.status === status)}
+                      onDrop={handleDrop}
+                      onEdit={openEdit}
+                      onDelete={handleDelete}
+                      onToggleTimer={toggleTimer}
+                      selectedIds={selectedTicketIds}
+                      onToggleSelection={toggleSelection}
+                    />
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : view === 'calendar' ? (
-            <CalendarView tickets={filteredTickets} />
-          ) : view === 'analytics' ? (
-            <AnalyticsView tickets={tickets} />
-          ) : (
-            <NotesView onCreateTask={handleCreateFromNote} />
-          )}
+              </>
+            )}
+
+            {view === 'calendar' && <CalendarView tickets={tickets} />}
+            
+            {view === 'analytics' && <AnalyticsView tickets={tickets} />}
+            
+            {view === 'notes' && <NotesView onCreateTask={handleCreateFromNote} />}
         </div>
+
+        {/* Floating Action Button for Mobile */}
+        {view === 'board' && (
+            <button 
+              onClick={() => { setEditingTicket(null); setPrefillTicketData(undefined); setIsModalOpen(true); }}
+              className="md:hidden absolute bottom-6 right-6 w-14 h-14 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-full shadow-xl flex items-center justify-center z-30 hover:scale-110 active:scale-95 transition-all"
+            >
+              <Plus className="w-8 h-8" />
+            </button>
+        )}
+
       </main>
 
       {/* Overlays */}
       <TicketModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        onSave={handleCreateOrUpdate}
-        initialData={editingTicket}
-        prefillData={prefillTicketData}
+          isOpen={isModalOpen} 
+          onClose={() => setIsModalOpen(false)} 
+          onSave={handleCreateOrUpdate}
+          initialData={editingTicket}
+          prefillData={prefillTicketData}
       />
-      
+
       <GeminiSidebar 
-        isOpen={isChatOpen} 
-        onClose={() => setIsChatOpen(false)} 
-        tickets={tickets} 
+          tickets={tickets} 
+          isOpen={isChatOpen} 
+          onClose={() => setIsChatOpen(false)} 
       />
 
     </div>
