@@ -1,4 +1,4 @@
-import { GoogleGenAI, Chat, GenerateContentResponse, Type } from "@google/genai";
+import { GoogleGenAI, Chat, GenerateContentResponse, Type, FunctionDeclaration } from "@google/genai";
 import { Ticket, ChatMode, AspectRatio, GroundingChunk, Slide } from "../types";
 
 // Configuration for different modes
@@ -7,6 +7,33 @@ const MODELS = {
   explorer: 'gemini-2.5-flash',      // Maps grounding
   artist: 'gemini-3-pro-image-preview', // Image generation
   blitz: 'gemini-2.5-flash-lite',    // Low latency
+};
+
+const createTicketFunc: FunctionDeclaration = {
+  name: "createTicket",
+  description: "Create a new task/ticket on the Kanban board.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING, description: "Title of the task" },
+      description: { type: Type.STRING, description: "Detailed description" },
+      priority: { type: Type.STRING, description: "Low, Medium, or High" },
+      dueDate: { type: Type.STRING, description: "YYYY-MM-DD format" }
+    },
+    required: ["title"]
+  }
+};
+
+const deleteTicketFunc: FunctionDeclaration = {
+  name: "deleteTicket",
+  description: "Delete a task/ticket by its exact ID.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      id: { type: Type.STRING, description: "The ID of the ticket to delete" }
+    },
+    required: ["id"]
+  }
 };
 
 export class GeminiAssistant {
@@ -30,6 +57,8 @@ export class GeminiAssistant {
     const tools: any[] = [];
     if (mode === 'explorer') {
       tools.push({ googleMaps: {} });
+    } else if (mode === 'assistant') {
+      tools.push({ functionDeclarations: [createTicketFunc, deleteTicketFunc] });
     }
 
     const chat = this.ai.chats.create({
@@ -109,7 +138,7 @@ export class GeminiAssistant {
       aspectRatio?: AspectRatio,
       location?: { lat: number, lng: number }
     }
-  ): AsyncGenerator<{ text: string, image?: string, grounding?: GroundingChunk[] }> {
+  ): AsyncGenerator<{ text: string, image?: string, grounding?: GroundingChunk[], functionCalls?: any[] }> {
     
     // IMAGE GENERATION (Artist Mode) - No streaming for images yet, yield once
     if (mode === 'artist') {
@@ -188,8 +217,13 @@ export class GeminiAssistant {
       let accumulatedText = "";
       
       for await (const chunk of result) {
-        accumulatedText += chunk.text;
-        yield { text: accumulatedText };
+        if (chunk.text) {
+          accumulatedText += chunk.text;
+        }
+        yield { 
+          text: accumulatedText, 
+          functionCalls: chunk.functionCalls 
+        };
       }
     } catch (error) {
       console.error("Chat Error", error);

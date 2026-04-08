@@ -1,8 +1,8 @@
-# 🚀 TaskFlow AI
+# 🚀 ClearTask
 
-**TaskFlow AI** is a next-generation, aesthetic project management dashboard that blends traditional Kanban methodologies with the power of Generative AI. Built with React 19, Tailwind CSS, and the Google Gemini API, it offers automated time tracking, context-aware AI assistance, and real-time productivity analytics wrapped in a modern "Glassmorphism" UI.
+**ClearTask** is a next-generation, aesthetic project management dashboard that blends traditional Kanban methodologies with the power of Generative AI. Built with React 19, Tailwind CSS, and the Google Gemini API, it offers automated time tracking, context-aware AI assistance, and real-time productivity analytics wrapped in a modern "Glassmorphism" UI.
 
-![TaskFlow AI Banner](https://via.placeholder.com/1200x600/6366f1/ffffff?text=TaskFlow+AI+Dashboard)
+![ClearTask Banner](https://via.placeholder.com/1200x600/6366f1/ffffff?text=ClearTask+Dashboard)
 *(Replace this image with a screenshot of your main Kanban board)*
 
 ---
@@ -75,8 +75,8 @@
 
 1.  **Clone the repository**
     ```bash
-    git clone https://github.com/yourusername/taskflow-ai.git
-    cd taskflow-ai
+    git clone https://github.com/yourusername/cleartask.git
+    cd cleartask
     ```
 
 2.  **Install dependencies**

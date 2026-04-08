@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
+import MDEditor from '@uiw/react-md-editor';
 import { Status, Priority, Ticket, ChatMessage, ChatMode, AspectRatio, Note, Slide } from './types';
 import { LayoutDashboard, CalendarIcon, Sparkles, Plus, Trash2, X, Moon, Sun, Clock, Send, Brain, MapPin, Image, Zap, Search, FileText, Presentation, Grid, Type, ChartLine, Play, Pause, CalendarPlus } from './components/Icons';
 import { geminiService } from './services/geminiService';
 
 // --- Local Storage Keys ---
-const STORAGE_KEY_TICKETS = 'taskflow_tickets';
-const STORAGE_KEY_THEME = 'taskflow_theme';
-const STORAGE_KEY_NOTES = 'taskflow_notes';
-const STORAGE_KEY_FONT = 'taskflow_font';
+const STORAGE_KEY_TICKETS = 'cleartask_tickets';
+const STORAGE_KEY_THEME = 'cleartask_theme';
+const STORAGE_KEY_NOTES = 'cleartask_notes';
+const STORAGE_KEY_FONT = 'cleartask_font';
 
 // --- Global Types for API Key Selection ---
 interface AIStudioClient {
@@ -519,14 +520,14 @@ const TicketModal: React.FC<{
               />
             </div>
           </div>
-          <div>
+          <div data-color-mode="light">
             <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-1">Description</label>
-            <textarea 
-              className="w-full p-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700/50 outline-none"
-              rows={3}
+            <MDEditor
               value={formData.description}
-              onChange={e => setFormData({...formData, description: e.target.value})}
-              placeholder="Add details..."
+              onChange={(val) => setFormData({...formData, description: val || ''})}
+              preview="edit"
+              height={150}
+              className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700/50"
             />
           </div>
           <div>
@@ -568,7 +569,7 @@ const NotesView: React.FC<NotesViewProps> = ({ onCreateTask }) => {
     } else {
       // Default note
       const newNote: Note = {
-        id: '1', title: 'Welcome Note', content: '# Welcome to TaskFlow Notes\nType here using **Markdown**.\n- List item 1\n- List item 2', isCanvasMode: false, lastModified: Date.now()
+        id: '1', title: 'Welcome Note', content: '# Welcome to ClearTask Notes\nType here using **Markdown**.\n- List item 1\n- List item 2', isCanvasMode: false, lastModified: Date.now()
       };
       setNotes([newNote]);
       setActiveNoteId('1');
@@ -700,7 +701,12 @@ const NotesView: React.FC<NotesViewProps> = ({ onCreateTask }) => {
 };
 
 // 5. Versatile Gemini Sidebar
-const GeminiSidebar: React.FC<{ tickets: Ticket[]; isOpen: boolean; onClose: () => void }> = ({ tickets, isOpen, onClose }) => {
+const GeminiSidebar: React.FC<{ 
+  tickets: Ticket[]; 
+  isOpen: boolean; 
+  onClose: () => void;
+  onTicketAction: (action: string, data: any) => void;
+}> = ({ tickets, isOpen, onClose, onTicketAction }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: '0', role: 'model', text: 'Hey there! I am your AI assistant. I am ready to help you quickly!', timestamp: Date.now() }
   ]);
@@ -755,13 +761,21 @@ const GeminiSidebar: React.FC<{ tickets: Ticket[]; isOpen: boolean; onClose: () 
       let isFirstChunk = true;
 
       for await (const chunk of stream) {
+        if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+          for (const call of chunk.functionCalls) {
+            if (call.name === 'createTicket' || call.name === 'deleteTicket') {
+              onTicketAction(call.name, call.args);
+            }
+          }
+        }
+
         setMessages(prev => {
           const newHistory = [...prev];
           if (isFirstChunk) {
              newHistory.push({
                id: responseId,
                role: 'model',
-               text: chunk.text,
+               text: chunk.text || (chunk.functionCalls ? "I have updated your board." : ""),
                image: chunk.image,
                grounding: chunk.grounding,
                timestamp: Date.now(),
@@ -772,7 +786,7 @@ const GeminiSidebar: React.FC<{ tickets: Ticket[]; isOpen: boolean; onClose: () 
              // Update last message
              const lastMsg = newHistory[newHistory.length - 1];
              if (lastMsg.id === responseId) {
-               lastMsg.text = chunk.text;
+               lastMsg.text = chunk.text || lastMsg.text;
                if (chunk.grounding) lastMsg.grounding = chunk.grounding;
              }
           }
@@ -953,12 +967,24 @@ const App: React.FC = () => {
   // NEW: Bulk Selection State
   const [selectedTicketIds, setSelectedTicketIds] = useState<Set<string>>(new Set());
 
+  const [isLoaded, setIsLoaded] = useState(false);
+
   // Load Initial State
   useEffect(() => {
-    const savedTickets = localStorage.getItem(STORAGE_KEY_TICKETS);
-    if (savedTickets) {
-      setTickets(JSON.parse(savedTickets));
-    }
+    const fetchTickets = async () => {
+      try {
+        const response = await fetch('/api/tickets');
+        if (response.ok) {
+          const data = await response.json();
+          setTickets(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch tickets:', error);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    fetchTickets();
     
     const savedTheme = localStorage.getItem(STORAGE_KEY_THEME);
     if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
@@ -974,14 +1000,21 @@ const App: React.FC = () => {
 
   // Persistence
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_TICKETS, JSON.stringify(tickets));
-  }, [tickets]);
+    if (!isLoaded) return;
+    fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tickets)
+    }).then(() => {
+      localStorage.setItem('sync_trigger', Date.now().toString());
+    }).catch(console.error);
+  }, [tickets, isLoaded]);
 
   // Sync across tabs
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY_TICKETS && e.newValue) {
-        setTickets(JSON.parse(e.newValue));
+      if (e.key === 'sync_trigger') {
+        fetch('/api/tickets').then(res => res.json()).then(setTickets).catch(console.error);
       }
     };
     window.addEventListener('storage', handleStorageChange);
@@ -1009,6 +1042,40 @@ const App: React.FC = () => {
     }, 60000); // Check every minute
     return () => clearInterval(interval);
   }, []);
+
+  // REAL PUSH NOTIFICATIONS
+  const notifiedTicketsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      Notification.requestPermission();
+    }
+    
+    const checkReminders = () => {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      
+      const now = new Date();
+      tickets.forEach(t => {
+        const due = new Date(t.dueDate);
+        const diffHours = (due.getTime() - now.getTime()) / (1000 * 60 * 60);
+        
+        // If due in less than 24h and not completed and hasn't been notified yet
+        if (diffHours > 0 && diffHours < 24 && t.status !== Status.Completed) {
+           if (!notifiedTicketsRef.current.has(t.id)) {
+             new Notification('Task Due Soon!', {
+               body: `"${t.title}" is due in less than 24 hours.`,
+               icon: '/favicon.ico' // Optional, if you have one
+             });
+             notifiedTicketsRef.current.add(t.id);
+           }
+        }
+      });
+    };
+    
+    // Run immediately and then every minute
+    checkReminders();
+    const interval = setInterval(checkReminders, 60000);
+    return () => clearInterval(interval);
+  }, [tickets]);
 
   const toggleTheme = () => {
     const newMode = !darkMode;
@@ -1052,6 +1119,26 @@ const App: React.FC = () => {
         next.delete(id);
         return next;
       });
+    }
+  };
+
+  const handleTicketAction = (action: string, data: any) => {
+    if (action === 'createTicket') {
+      const newTicket: Ticket = {
+        id: crypto.randomUUID(),
+        title: data.title,
+        description: data.description || '',
+        status: Status.Backlog,
+        priority: data.priority as Priority || Priority.Medium,
+        dueDate: data.dueDate || new Date().toISOString().split('T')[0],
+        tags: '',
+        timeSpent: 0,
+        isTiming: false,
+        createdAt: Date.now()
+      };
+      setTickets(prev => [...prev, newTicket]);
+    } else if (action === 'deleteTicket') {
+      setTickets(prev => prev.filter(t => t.id !== data.id));
     }
   };
 
@@ -1204,9 +1291,9 @@ const App: React.FC = () => {
       <aside className="w-20 lg:w-64 flex flex-col border-r border-white/20 dark:border-gray-800 bg-white/60 dark:bg-gray-900/80 backdrop-blur-2xl z-10 transition-all duration-300">
         <div className="h-24 flex items-center justify-center lg:justify-start lg:px-6 border-b border-white/20 dark:border-gray-800">
           <div className="w-12 h-12 rounded-xl overflow-hidden shadow-lg transform transition-transform hover:rotate-12 hover:scale-105">
-            <img src="https://i.im.ge/2026/02/06/e0S4ET.Screenshot-from-2026-02-06-12-40-27.png" alt="TaskFlow Logo" className="w-full h-full object-cover" />
+            <img src="/logo.png" alt="ClearTask Logo" className="w-full h-full object-cover" />
           </div>
-          <span className="ml-3 font-bold text-2xl hidden lg:block tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-pink-500 dark:from-indigo-400 dark:to-pink-400">TaskFlow</span>
+          <span className="ml-3 font-bold text-2xl hidden lg:block tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-pink-500 dark:from-indigo-400 dark:to-pink-400">ClearTask</span>
         </div>
         
         <nav className="flex-1 p-4 space-y-3 mt-4">
@@ -1368,6 +1455,7 @@ const App: React.FC = () => {
           tickets={tickets} 
           isOpen={isChatOpen} 
           onClose={() => setIsChatOpen(false)} 
+          onTicketAction={handleTicketAction}
       />
 
     </div>
